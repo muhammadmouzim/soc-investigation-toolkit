@@ -1,5 +1,6 @@
 import re
 from collections import Counter
+from ipaddress import ip_address
 
 
 # ============================================================
@@ -7,7 +8,6 @@ from collections import Counter
 # ============================================================
 
 LOG_FILE = "sample_data/auth.log"
-
 FAILED_LOGIN_THRESHOLD = 3
 
 
@@ -17,15 +17,16 @@ FAILED_LOGIN_THRESHOLD = 3
 
 def parse_log_line(line):
     """
-    Extract useful fields from one authentication log line.
+    Extract timestamp, level, message, username and IP
+    from a security log line.
     """
 
     pattern = (
-        r"(?P<timestamp>\d{4}-\d{2}-\d{2} "
-        r"\d{2}:\d{2}:\d{2}) "
-        r"(?P<level>\w+) "
-        r"(?P<message>.*?) "
-        r"username=(?P<username>\S+) "
+        r"(?P<timestamp>\d{4}-\d{2}-\d{2}\s"
+        r"\d{2}:\d{2}:\d{2})\s+"
+        r"(?P<level>\w+)\s+"
+        r"(?P<message>.*?)\s+"
+        r"username=(?P<username>\S+)\s+"
         r"ip=(?P<ip>\S+)"
     )
 
@@ -38,13 +39,201 @@ def parse_log_line(line):
 
 
 # ============================================================
-# LOAD LOG FILE
+# IP CLASSIFICATION
+# ============================================================
+
+def classify_ip(ip):
+    """
+    Determine whether the IP is private/internal or public/external.
+    """
+
+    try:
+        address = ip_address(ip)
+
+        if address.is_private:
+            return "Private / Internal"
+
+        return "Public / External"
+
+    except ValueError:
+        return "Unknown"
+
+
+# ============================================================
+# EVENT TYPE
+# ============================================================
+
+def determine_event(message):
+    """
+    Determine the type of authentication event.
+    """
+
+    message_lower = message.lower()
+
+    if "failed login" in message_lower:
+        return "Failed Login"
+
+    if "login successful" in message_lower:
+        return "Successful Login"
+
+    if "account locked" in message_lower:
+        return "Account Lockout"
+
+    if "unauthorized" in message_lower:
+        return "Unauthorized Access"
+
+    if "connection" in message_lower:
+        return "Network Connection"
+
+    return "Other Security Event"
+
+
+# ============================================================
+# SINGLE LOG ANALYSIS
+# ============================================================
+
+def analyze_single_log():
+
+    print("\n" + "=" * 60)
+    print("                 SINGLE LOG ANALYSIS")
+    print("=" * 60)
+
+    line = input("\nEnter security log line:\n> ").strip()
+
+    if not line:
+        print("\n[-] No input provided.")
+        return
+
+    log = parse_log_line(line)
+
+    if not log:
+
+        print("\n[-] Could not parse this log line.")
+
+        print("\nExpected format:")
+        print(
+            "2026-09-19 10:15:22 WARN "
+            "Failed login username=admin ip=203.0.113.50"
+        )
+
+        return
+
+    event_type = determine_event(log["message"])
+    ip_type = classify_ip(log["ip"])
+
+    message_lower = log["message"].lower()
+
+    # Determine severity
+    if "account locked" in message_lower:
+        severity = "HIGH"
+
+    elif "failed login" in message_lower:
+        severity = "HIGH"
+
+    elif "unauthorized" in message_lower:
+        severity = "HIGH"
+
+    elif log["level"].upper() in ["ERROR", "CRITICAL"]:
+        severity = "HIGH"
+
+    elif log["level"].upper() == "WARN":
+        severity = "MEDIUM"
+
+    else:
+        severity = "LOW"
+
+    # ========================================================
+    # DISPLAY
+    # ========================================================
+
+    print("\n" + "=" * 60)
+    print("                    LOG ANALYSIS")
+    print("=" * 60)
+
+    print(f"\nTimestamp       : {log['timestamp']}")
+    print(f"Log Level      : {log['level']}")
+    print(f"Event Type      : {event_type}")
+    print(f"Username        : {log['username']}")
+    print(f"Source IP       : {log['ip']}")
+    print(f"IP Classification: {ip_type}")
+    print(f"Severity        : {severity}")
+
+    print("\n" + "-" * 60)
+    print("                 SECURITY INDICATORS")
+    print("-" * 60)
+
+    indicators = []
+
+    if "failed login" in message_lower:
+        indicators.append("Failed authentication detected")
+
+    if "account locked" in message_lower:
+        indicators.append("Account lockout detected")
+
+    if "unauthorized" in message_lower:
+        indicators.append("Unauthorized access attempt detected")
+
+    if ip_type == "Public / External":
+        indicators.append("External source IP detected")
+
+    if log["username"].lower() in ["admin", "root", "administrator"]:
+        indicators.append("Privileged account targeted")
+
+    if indicators:
+
+        for indicator in indicators:
+            print(f"[!] {indicator}")
+
+    else:
+
+        print("[+] No obvious suspicious indicators")
+
+    # ========================================================
+    # SOC ASSESSMENT
+    # ========================================================
+
+    print("\n" + "-" * 60)
+    print("                    SOC ASSESSMENT")
+    print("-" * 60)
+
+    if severity == "HIGH":
+
+        print("[!] Risk Level   : HIGH")
+        print(f"[!] Event        : {event_type}")
+        print(f"[!] Source       : {log['ip']}")
+
+        print("\n[!] Recommended Investigation:")
+
+        print("[1] Check previous events from this IP.")
+        print("[2] Review activity against the same user account.")
+        print("[3] Investigate the source IP using IP Lookup.")
+        print("[4] Correlate this event with other security logs.")
+
+    elif severity == "MEDIUM":
+
+        print("[!] Risk Level   : MEDIUM")
+        print(f"[!] Event        : {event_type}")
+
+        print("\n[+] Recommended Investigation:")
+
+        print("[1] Monitor this source IP.")
+        print("[2] Check for repeated events.")
+        print("[3] Correlate with other authentication logs.")
+
+    else:
+
+        print("[+] Risk Level   : LOW")
+        print(f"[+] Event        : {event_type}")
+        print("[+] No immediate suspicious indicator detected.")
+
+    print("\n" + "=" * 60)
+
+
+# ============================================================
+# FILE ANALYSIS
 # ============================================================
 
 def load_logs(filename):
-    """
-    Read the log file and parse valid log entries.
-    """
 
     logs = []
 
@@ -66,64 +255,41 @@ def load_logs(filename):
 
     except FileNotFoundError:
 
-        print(f"[-] Log file not found: {filename}")
+        print(f"\n[-] Log file not found: {filename}")
 
     except PermissionError:
 
-        print(f"[-] Permission denied: {filename}")
+        print(f"\n[-] Permission denied: {filename}")
 
     except OSError as error:
 
-        print(f"[-] File error: {error}")
+        print(f"\n[-] File error: {error}")
 
     return logs
 
 
 # ============================================================
-# FAILED LOGIN ANALYSIS
+# FULL LOG ANALYSIS
 # ============================================================
 
-def analyze_failed_logins(logs):
+def analyze_full_log():
+
+    print("\n" + "=" * 60)
+    print("                  FULL LOG ANALYSIS")
+    print("=" * 60)
+
+    logs = load_logs(LOG_FILE)
+
+    if not logs:
+
+        print("\n[-] No valid log entries found.")
+        return
 
     failed_ips = Counter()
-
     failed_users = Counter()
 
-    for log in logs:
-
-        if "Failed login" in log["message"]:
-
-            failed_ips[log["ip"]] += 1
-            failed_users[log["username"]] += 1
-
-    return failed_ips, failed_users
-
-
-# ============================================================
-# SUCCESSFUL LOGIN ANALYSIS
-# ============================================================
-
-def analyze_successful_logins(logs):
-
     successful_ips = Counter()
-
     successful_users = Counter()
-
-    for log in logs:
-
-        if "Login successful" in log["message"]:
-
-            successful_ips[log["ip"]] += 1
-            successful_users[log["username"]] += 1
-
-    return successful_ips, successful_users
-
-
-# ============================================================
-# SUSPICIOUS EVENT DETECTION
-# ============================================================
-
-def detect_suspicious_events(logs):
 
     suspicious_events = []
 
@@ -131,33 +297,22 @@ def detect_suspicious_events(logs):
 
         message = log["message"].lower()
 
+        if "failed login" in message:
+
+            failed_ips[log["ip"]] += 1
+            failed_users[log["username"]] += 1
+            suspicious_events.append(log)
+
+        elif "login successful" in message:
+
+            successful_ips[log["ip"]] += 1
+            successful_users[log["username"]] += 1
+
         if "account locked" in message:
 
             suspicious_events.append(log)
 
-        elif "failed login" in message:
-
-            suspicious_events.append(log)
-
-    return suspicious_events
-
-
-# ============================================================
-# DISPLAY RESULTS
-# ============================================================
-
-def display_results(
-    logs,
-    failed_ips,
-    failed_users,
-    successful_ips,
-    successful_users,
-    suspicious_events
-):
-
-    print("\n=== SOC Log Analysis ===")
-
-    print(f"[+] Total log entries : {len(logs)}")
+    print(f"\n[+] Total log entries : {len(logs)}")
 
     print("\n=== Failed Login Analysis ===")
 
@@ -165,9 +320,7 @@ def display_results(
 
         for ip, count in failed_ips.items():
 
-            print(
-                f"[!] IP {ip} → {count} failed login(s)"
-            )
+            print(f"[!] IP {ip} → {count} failed login(s)")
 
     else:
 
@@ -177,11 +330,9 @@ def display_results(
 
     if failed_users:
 
-        for username, count in failed_users.items():
+        for user, count in failed_users.items():
 
-            print(
-                f"[!] User {username} → {count} failed login(s)"
-            )
+            print(f"[!] User {user} → {count} failed login(s)")
 
     else:
 
@@ -193,9 +344,7 @@ def display_results(
 
         for ip, count in successful_ips.items():
 
-            print(
-                f"[+] IP {ip} → {count} successful login(s)"
-            )
+            print(f"[+] IP {ip} → {count} successful login(s)")
 
     else:
 
@@ -205,11 +354,9 @@ def display_results(
 
     if successful_users:
 
-        for username, count in successful_users.items():
+        for user, count in successful_users.items():
 
-            print(
-                f"[+] User {username} → {count} successful login(s)"
-            )
+            print(f"[+] User {user} → {count} successful login(s)")
 
     else:
 
@@ -243,58 +390,58 @@ def display_results(
 
     if high_risk_ips:
 
-        print(
-            "[!] HIGH PRIORITY: Repeated failed login "
-            "activity detected."
-        )
+        print("[!] HIGH PRIORITY: Repeated failed login activity detected.")
 
         for ip in high_risk_ips:
-
-            print(
-                f"[!] Investigate IP: {ip}"
-            )
+            print(f"[!] Investigate IP: {ip}")
 
     elif suspicious_events:
 
-        print(
-            "[!] REVIEW REQUIRED: Suspicious events detected."
-        )
+        print("[!] REVIEW REQUIRED: Suspicious events detected.")
 
     else:
 
-        print(
-            "[+] No obvious suspicious authentication "
-            "activity detected."
-        )
+        print("[+] No obvious suspicious authentication activity detected.")
+
+    print("\n" + "=" * 60)
 
 
 # ============================================================
-# MAIN PROGRAM
+# MAIN MENU
 # ============================================================
 
-print("=== SOC Authentication Log Parser ===")
+def main():
 
-logs = load_logs(LOG_FILE)
+    print("\n" + "=" * 60)
+    print("             SOC AUTHENTICATION LOG PARSER")
+    print("=" * 60)
 
-if not logs:
+    print("\n[1] Analyze a single log entry")
+    print("[2] Analyze complete log file")
+    print("[0] Exit")
 
-    print("\n[-] No valid log entries were found.")
+    choice = input("\nSelect option: ").strip()
 
-else:
+    if choice == "1":
 
-    failed_ips, failed_users = analyze_failed_logins(logs)
+        analyze_single_log()
 
-    successful_ips, successful_users = analyze_successful_logins(
-        logs
-    )
+    elif choice == "2":
 
-    suspicious_events = detect_suspicious_events(logs)
+        analyze_full_log()
 
-    display_results(
-        logs,
-        failed_ips,
-        failed_users,
-        successful_ips,
-        successful_users,
-        suspicious_events
-    )
+    elif choice == "0":
+
+        print("\n[+] Exiting.")
+
+    else:
+
+        print("\n[-] Invalid option.")
+
+
+# ============================================================
+# PROGRAM START
+# ============================================================
+
+if __name__ == "__main__":
+    main()
